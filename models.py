@@ -562,21 +562,28 @@ class atm(nn.Module):
     def __init__(self, n_features=32):
         super(atm, self).__init__()
         k_size = 3
-        act = nn.ReLU(inplace=True)
+        act = nn.PReLU()
+        self.stem = nn.Sequential(
+            basic_conv(3, int(n_features/2), kernel_size=k_size),
+            nn.BatchNorm2d(int(n_features/2)),
+            act,
+        )
         self.mask = nn.Sequential(
-            nn.BatchNorm2d(3),
+            nn.BatchNorm2d(int(n_features/2)),
             act,
-            basic_conv(3, n_features*4, kernel_size=k_size),
-            nn.BatchNorm2d(n_features*4),
-            act,
-            basic_conv(n_features*4, n_features, kernel_size=k_size),
-            nn.BatchNorm2d(n_features),
-            act,
-            basic_conv(n_features, 1, kernel_size=1),
+            basic_conv(int(n_features/2), n_features*4, kernel_size=5 ,stride=4),
+            basic_conv(n_features*4, int(n_features/2), kernel_size=k_size),
+        )
+        self.out = nn.Sequential(
+            basic_conv(int(n_features/2), 1, kernel_size=k_size),
             nn.Sigmoid(),
         )
     def forward(self, x):
-        out = self.mask(x)
+        stem = self.stem(x)
+        res = self.mask(stem)
+        res = F.interpolate(res, scale_factor=4, mode='bilinear', align_corners=False)
+        out = stem + res
+        out = self.out(out)
         return out
 
 class net_SR_5_filter(nn.Module):
@@ -605,12 +612,16 @@ class net_SR_5_filter(nn.Module):
             layers.append(ResBlock_W_SE(basic_conv, n_features, kernel_size=k_size, act=act, res_scale=1.0))
         layers.append(wn(basic_conv(n_features, n_features, k_size)))
         self.res_layer = nn.Sequential(*layers)
-        self.atm = atm()
+        self.atm = atm(n_features)
+        self.sig = nn.Tanh()
+        self.sig_out = nn.Sigmoid()
+        self.act = act
 
     def forward(self, x):
         out_res = self.layer_out_res(self.res_layer(self.stem(x)))
         out_in = self.layer_out_in(x)
-        out = out_res*self.atm(out_res) + out_in*self.atm(out_in)
+        out = self.act(out_res*self.atm(out_res)) + self.act(out_in*self.atm(out_in))
+        out = self.sig_out(out)
         return out
 
 
